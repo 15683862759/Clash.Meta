@@ -31,6 +31,7 @@ type GroupBase struct {
 	failedTime        time.Time
 	failedTesting     atomic.Bool
 	healthChecking    atomic.Bool
+	urlTesting        atomic.Int32
 	TestTimeout       int
 	maxFailedTimes    int
 
@@ -81,6 +82,7 @@ func NewGroupBase(opt GroupBaseOption) *GroupBase {
 		providers:         opt.Providers,
 		failedTesting:     atomic.NewBool(false),
 		healthChecking:    atomic.NewBool(false),
+		urlTesting:        atomic.NewInt32(0),
 		TestTimeout:       opt.TestTimeout,
 		maxFailedTimes:    opt.MaxFailedTimes,
 	}
@@ -219,6 +221,9 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 const groupURLTestConcurrency = 10
 
 func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
+	gb.urlTesting.Add(1)
+	defer gb.urlTesting.Add(-1)
+
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	mp := map[string]uint16{}
@@ -304,6 +309,9 @@ func (gb *GroupBase) handleDialFailed(err error, fn func()) {
 }
 
 func (gb *GroupBase) triggerHealthCheck(fn func()) {
+	if gb.urlTesting.Load() > 0 {
+		return
+	}
 	if !gb.healthChecking.CompareAndSwap(false, true) {
 		return
 	}

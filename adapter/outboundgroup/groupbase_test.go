@@ -123,6 +123,86 @@ func TestFailureDuringHealthCheckDoesNotQueueAnother(t *testing.T) {
 	}
 }
 
+type blockingURLTestProxy struct {
+	*outbound.Base
+	started chan struct{}
+	release chan struct{}
+}
+
+func newBlockingURLTestProxy(name string, started, release chan struct{}) *blockingURLTestProxy {
+	return &blockingURLTestProxy{
+		Base:    outbound.NewBase(outbound.BaseOption{Name: name, Type: C.Direct}),
+		started: started,
+		release: release,
+	}
+}
+
+func (p *blockingURLTestProxy) Adapter() C.ProxyAdapter {
+	return p
+}
+
+func (p *blockingURLTestProxy) AliveForTestUrl(string) bool {
+	return true
+}
+
+func (p *blockingURLTestProxy) DelayHistory() []C.DelayHistory {
+	return []C.DelayHistory{}
+}
+
+func (p *blockingURLTestProxy) ExtraDelayHistories() map[string]C.ProxyState {
+	return map[string]C.ProxyState{}
+}
+
+func (p *blockingURLTestProxy) LastDelayForTestUrl(string) uint16 {
+	return 100
+}
+
+func (p *blockingURLTestProxy) URLTest(context.Context, string, utils.IntRanges[uint16]) (uint16, error) {
+	p.started <- struct{}{}
+	<-p.release
+	return 100, nil
+}
+
+func TestURLTestSuppressesFailureTriggeredHealthCheck(t *testing.T) {
+	urlTestStarted := make(chan struct{}, 1)
+	release := make(chan struct{})
+	provider := &gatedHealthCheckProvider{
+		started: make(chan struct{}, 2),
+		release: release,
+	}
+	provider.proxies = []C.Proxy{newBlockingURLTestProxy("proxy", urlTestStarted, release)}
+	group := NewGroupBase(GroupBaseOption{
+		Name:           "auto",
+		Type:           C.URLTest,
+		TestTimeout:    9000,
+		MaxFailedTimes: 1,
+		Providers:      []P.ProxyProvider{provider},
+	})
+
+	urlTestDone := make(chan struct{})
+	go func() {
+		defer close(urlTestDone)
+		_, err := group.URLTest(context.Background(), proxyHealthCheckURL, nil)
+		if err != nil {
+			t.Errorf("URLTest returned error: %v", err)
+		}
+	}()
+	select {
+	case <-urlTestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("group URL test did not start")
+	}
+
+	go group.triggerHealthCheck(group.healthCheck)
+	time.Sleep(20 * time.Millisecond)
+	if calls := provider.calls.Load(); calls != 0 {
+		t.Fatalf("expected manual URL test to suppress a duplicate health check, got %d checks", calls)
+	}
+
+	close(release)
+	<-urlTestDone
+}
+
 type concurrencyTracker struct {
 	active  atomic.Int32
 	max     atomic.Int32
