@@ -68,6 +68,61 @@ func TestSecondFailedDialWithinWindowTriggersHealthCheck(t *testing.T) {
 	}
 }
 
+type gatedHealthCheckProvider struct {
+	healthCheckProvider
+	calls   atomic.Int32
+	started chan struct{}
+	release chan struct{}
+}
+
+func (p *gatedHealthCheckProvider) HealthCheck() {
+	p.calls.Add(1)
+	p.started <- struct{}{}
+	<-p.release
+}
+
+func TestFailureDuringHealthCheckDoesNotQueueAnother(t *testing.T) {
+	provider := &gatedHealthCheckProvider{
+		started: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	group := NewGroupBase(GroupBaseOption{
+		Name:           "auto",
+		Type:           C.URLTest,
+		TestTimeout:    9000,
+		MaxFailedTimes: 1,
+		Providers:      []P.ProxyProvider{provider},
+	})
+
+	firstDone := make(chan struct{})
+	go func() {
+		defer close(firstDone)
+		group.handleDialFailed(errors.New("first dial failed"), group.healthCheck)
+	}()
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("first health check did not start")
+	}
+
+	secondDone := make(chan struct{})
+	go func() {
+		defer close(secondDone)
+		group.handleDialFailed(errors.New("second dial failed"), group.healthCheck)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	if provider.calls.Load() != 1 {
+		t.Fatalf("expected the active health check to suppress overlapping requests, got %d checks", provider.calls.Load())
+	}
+
+	close(provider.release)
+	<-firstDone
+	<-secondDone
+	if provider.calls.Load() != 1 {
+		t.Fatalf("expected no queued follow-up health check, got %d checks", provider.calls.Load())
+	}
+}
+
 type concurrencyTracker struct {
 	active  atomic.Int32
 	max     atomic.Int32

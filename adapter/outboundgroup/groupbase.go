@@ -30,6 +30,7 @@ type GroupBase struct {
 	failedTimes       int
 	failedTime        time.Time
 	failedTesting     atomic.Bool
+	healthChecking    atomic.Bool
 	TestTimeout       int
 	maxFailedTimes    int
 
@@ -79,6 +80,7 @@ func NewGroupBase(opt GroupBaseOption) *GroupBase {
 		excludeTypeArray:  excludeTypeArray,
 		providers:         opt.Providers,
 		failedTesting:     atomic.NewBool(false),
+		healthChecking:    atomic.NewBool(false),
 		TestTimeout:       opt.TestTimeout,
 		maxFailedTimes:    opt.MaxFailedTimes,
 	}
@@ -274,12 +276,11 @@ func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func(
 
 func (gb *GroupBase) handleDialFailed(err error, fn func()) {
 	if strings.Contains(err.Error(), "connection refused") {
-		fn()
+		gb.triggerHealthCheck(fn)
 		return
 	}
 
 	gb.failedTestMux.Lock()
-	defer gb.failedTestMux.Unlock()
 
 	if time.Since(gb.failedTime) > time.Duration(gb.TestTimeout)*time.Millisecond {
 		gb.failedTimes = 0
@@ -287,10 +288,28 @@ func (gb *GroupBase) handleDialFailed(err error, fn func()) {
 	}
 	gb.failedTimes++
 
+	shouldTrigger := false
 	if gb.failedTimes >= gb.maxFailedTimes {
-		log.Warnln("because %s failed multiple times, active health check", gb.Name())
-		fn()
+		gb.failedTimes = 0
+		shouldTrigger = true
 	}
+	gb.failedTestMux.Unlock()
+
+	if !shouldTrigger {
+		return
+	}
+
+	log.Warnln("because %s failed multiple times, active health check", gb.Name())
+	gb.triggerHealthCheck(fn)
+}
+
+func (gb *GroupBase) triggerHealthCheck(fn func()) {
+	if !gb.healthChecking.CompareAndSwap(false, true) {
+		return
+	}
+	defer gb.healthChecking.Store(false)
+
+	fn()
 }
 
 func (gb *GroupBase) healthCheck() {
@@ -310,12 +329,16 @@ func (gb *GroupBase) healthCheck() {
 	}
 
 	wg.Wait()
-	gb.failedTesting.Store(false)
+	gb.failedTestMux.Lock()
 	gb.failedTimes = 0
+	gb.failedTestMux.Unlock()
+	gb.failedTesting.Store(false)
 }
 
 func (gb *GroupBase) onDialSuccess() {
 	if !gb.failedTesting.Load() {
+		gb.failedTestMux.Lock()
 		gb.failedTimes = 0
+		gb.failedTestMux.Unlock()
 	}
 }
