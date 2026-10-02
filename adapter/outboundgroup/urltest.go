@@ -16,6 +16,8 @@ import (
 
 type urlTestOption func(*URLTest)
 
+var fastRecheckInterval = time.Second * 3
+
 func urlTestWithTolerance(tolerance uint16) urlTestOption {
 	return func(u *URLTest) {
 		u.tolerance = tolerance
@@ -102,6 +104,22 @@ func (u *URLTest) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 
 func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
+	ticker := time.NewTicker(fastRecheckInterval)
+	defer ticker.Stop()
+	done := make(chan struct{})
+	defer close(done)
+
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				u.fastSingle.Reset()
+			case <-done:
+				return
+			}
+		}
+	}()
+
 	u.GroupBase.healthCheck()
 	u.fastSingle.Reset()
 }

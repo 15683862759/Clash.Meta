@@ -252,31 +252,29 @@ func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func(
 	}
 
 	go func() {
-		if strings.Contains(err.Error(), "connection refused") {
-			fn()
-			return
-		}
-
-		gb.failedTestMux.Lock()
-		defer gb.failedTestMux.Unlock()
-
-		gb.failedTimes++
-		if gb.failedTimes == 1 {
-			log.Debugln("ProxyGroup: %s first failed", gb.Name())
-			gb.failedTime = time.Now()
-		} else {
-			if time.Since(gb.failedTime) > time.Duration(gb.TestTimeout)*time.Millisecond {
-				gb.failedTimes = 0
-				return
-			}
-
-			log.Debugln("ProxyGroup: %s failed count: %d", gb.Name(), gb.failedTimes)
-			if gb.failedTimes >= gb.maxFailedTimes {
-				log.Warnln("because %s failed multiple times, active health check", gb.Name())
-				fn()
-			}
-		}
+		gb.handleDialFailed(err, fn)
 	}()
+}
+
+func (gb *GroupBase) handleDialFailed(err error, fn func()) {
+	if strings.Contains(err.Error(), "connection refused") {
+		fn()
+		return
+	}
+
+	gb.failedTestMux.Lock()
+	defer gb.failedTestMux.Unlock()
+
+	if time.Since(gb.failedTime) > time.Duration(gb.TestTimeout)*time.Millisecond {
+		gb.failedTimes = 0
+		gb.failedTime = time.Now()
+	}
+	gb.failedTimes++
+
+	if gb.failedTimes >= gb.maxFailedTimes {
+		log.Warnln("because %s failed multiple times, active health check", gb.Name())
+		fn()
+	}
 }
 
 func (gb *GroupBase) healthCheck() {
