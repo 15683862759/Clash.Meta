@@ -214,15 +214,31 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 	return proxies
 }
 
+const groupURLTestConcurrency = 10
+
 func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
 	mp := map[string]uint16{}
 	proxies := gb.GetProxies(false)
+	semaphoreSize := groupURLTestConcurrency
+	if len(proxies) < semaphoreSize {
+		semaphoreSize = len(proxies)
+	}
+	semaphore := make(chan struct{}, semaphoreSize)
 	for _, proxy := range proxies {
 		proxy := proxy
 		wg.Add(1)
 		go func() {
+			select {
+			case semaphore <- struct{}{}:
+			case <-ctx.Done():
+				wg.Done()
+				return
+			}
+			defer func() {
+				<-semaphore
+			}()
 			delay, err := proxy.URLTest(ctx, url, expectedStatus)
 			if err == nil {
 				lock.Lock()
