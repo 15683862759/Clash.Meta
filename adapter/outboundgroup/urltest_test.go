@@ -68,8 +68,9 @@ func (p *healthCheckProvider) HealthCheckURL() string {
 
 type testDelayProxy struct {
 	*outbound.Base
-	delay uint16
-	alive bool
+	delay        uint16
+	alive        bool
+	urlTestDelay time.Duration
 }
 
 func newTestDelayProxy(name string, delay uint16, alive bool) *testDelayProxy {
@@ -106,6 +107,7 @@ func (p *testDelayProxy) LastDelayForTestUrl(string) uint16 {
 }
 
 func (p *testDelayProxy) URLTest(context.Context, string, utils.IntRanges[uint16]) (uint16, error) {
+	time.Sleep(p.urlTestDelay)
 	return p.delay, nil
 }
 
@@ -148,6 +150,56 @@ func TestURLTestSwitchesToCompletedFastNodeBeforeCheckFinishes(t *testing.T) {
 			t.Fatal("expected to switch before the whole health check finished")
 		case <-deadline:
 			t.Fatalf("expected completed fast node to be selected, got %q", group.Now())
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	<-done
+}
+
+func TestManualURLTestSwitchesToCompletedFastNodeBeforeFinishes(t *testing.T) {
+	originalInterval := fastRecheckInterval
+	fastRecheckInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		fastRecheckInterval = originalInterval
+	})
+
+	slowProxy := newTestDelayProxy("slow", 300, true)
+	fastProxy := newTestDelayProxy("fast", 50, false)
+	fastProxy.urlTestDelay = 50 * time.Millisecond
+	slowProxy.urlTestDelay = 250 * time.Millisecond
+	provider := &healthCheckProvider{
+		proxies: []C.Proxy{slowProxy, fastProxy},
+	}
+	group := NewURLTest(
+		&GroupCommonOption{Name: "auto", URL: proxyHealthCheckURL},
+		[]P.ProxyProvider{provider},
+	)
+
+	if got := group.Now(); got != "slow" {
+		t.Fatalf("expected the first available node to be selected, got %q", got)
+	}
+
+	fastProxy.alive = true
+	done := make(chan struct{})
+	go func() {
+		_, err := group.URLTest(context.Background(), proxyHealthCheckURL, nil)
+		if err != nil {
+			t.Errorf("URLTest returned error: %v", err)
+		}
+		close(done)
+	}()
+
+	deadline := time.After(400 * time.Millisecond)
+	for {
+		if got := group.Now(); got == "fast" {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("expected to switch before the manual URL test finished")
+		case <-deadline:
+			t.Fatalf("expected completed fast node to be selected during manual URL test, got %q", group.Now())
 		case <-time.After(time.Millisecond):
 		}
 	}

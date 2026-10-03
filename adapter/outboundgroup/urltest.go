@@ -103,11 +103,16 @@ func (u *URLTest) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 }
 
 func (u *URLTest) healthCheck() {
+	stopRecheck := u.startFastRecheck()
+	defer stopRecheck()
+
+	u.GroupBase.healthCheck()
+}
+
+func (u *URLTest) startFastRecheck() func() {
 	u.fastSingle.Reset()
 	ticker := time.NewTicker(fastRecheckInterval)
-	defer ticker.Stop()
 	done := make(chan struct{})
-	defer close(done)
 
 	go func() {
 		for {
@@ -120,8 +125,11 @@ func (u *URLTest) healthCheck() {
 		}
 	}()
 
-	u.GroupBase.healthCheck()
-	u.fastSingle.Reset()
+	return func() {
+		ticker.Stop()
+		close(done)
+		u.fastSingle.Reset()
+	}
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
@@ -204,6 +212,9 @@ func (u *URLTest) MarshalJSON() ([]byte, error) {
 }
 
 func (u *URLTest) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
+	stopRecheck := u.startFastRecheck()
+	defer stopRecheck()
+
 	return u.GroupBase.URLTest(ctx, u.testUrl, expectedStatus)
 }
 
