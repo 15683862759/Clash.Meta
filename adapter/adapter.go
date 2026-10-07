@@ -52,6 +52,22 @@ func (p *Proxy) AliveForTestUrl(url string) bool {
 	return p.alive.Load()
 }
 
+// SetAliveForTestUrl records a locally observed dial result for the test URL.
+func (p *Proxy) SetAliveForTestUrl(url string, alive bool) {
+	p.alive.Store(alive)
+	if url == "" {
+		return
+	}
+
+	state, _ := p.extra.LoadOrStoreFn(url, func() *internalProxyState {
+		return &internalProxyState{
+			history: queue.New[C.DelayHistory](defaultHistoriesNum),
+			alive:   atomic.NewBool(alive),
+		}
+	})
+	state.alive.Store(alive)
+}
+
 // DialContext implements C.ProxyAdapter
 func (p *Proxy) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
 	conn, err := p.ProxyAdapter.DialContext(ctx, metadata)

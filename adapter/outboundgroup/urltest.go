@@ -53,6 +53,23 @@ func (u *URLTest) ForceSet(name string) {
 	u.fastSingle.Reset()
 }
 
+// markProxyFailed stops selecting a proxy after a failed dial. The periodic
+// health check can restore it later if the proxy becomes reachable again.
+func (u *URLTest) markProxyFailed(proxy C.Proxy, err error) {
+	if proxy == nil || errors.Is(err, C.ErrNotSupport) {
+		return
+	}
+	type aliveSetter interface {
+		SetAliveForTestUrl(string, bool)
+	}
+	setter, ok := proxy.(aliveSetter)
+	if !ok {
+		return
+	}
+	setter.SetAliveForTestUrl(u.testUrl, false)
+	u.fastSingle.Reset()
+}
+
 // DialContext implements C.ProxyAdapter
 func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Conn, err error) {
 	proxy := u.fast(true)
@@ -60,6 +77,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
+		u.markProxyFailed(proxy, err)
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -68,6 +86,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			if err == nil {
 				u.onDialSuccess()
 			} else {
+				u.markProxyFailed(proxy, err)
 				u.onDialFailed(proxy.Type(), err, u.healthCheck)
 			}
 		})
@@ -83,6 +102,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
+		u.markProxyFailed(proxy, err)
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -115,25 +135,25 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 			}
 		}
 
-		fast := proxies[0]
-		minDelay := fast.LastDelayForTestUrl(u.testUrl)
+		var fast C.Proxy
+		var minDelay uint16
 		fastNotExist := true
 
-		for _, proxy := range proxies[1:] {
+		for _, proxy := range proxies {
 			if u.fastNode != nil && proxy.Name() == u.fastNode.Name() {
 				fastNotExist = false
 			}
-
 			if !proxy.AliveForTestUrl(u.testUrl) {
 				continue
 			}
-
 			delay := proxy.LastDelayForTestUrl(u.testUrl)
-			if delay < minDelay {
+			if fast == nil || delay < minDelay {
 				fast = proxy
 				minDelay = delay
 			}
-
+		}
+		if fast == nil {
+			fast = proxies[0]
 		}
 		// tolerance
 		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
