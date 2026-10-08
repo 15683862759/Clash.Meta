@@ -325,6 +325,13 @@ func (gb *GroupBase) healthCheck() {
 	if !gb.failedTesting.CompareAndSwap(false, true) {
 		return
 	}
+	defer func() {
+		gb.failedTestMux.Lock()
+		gb.failedTimes = 0
+		gb.failedTestMux.Unlock()
+		gb.failedTesting.Store(false)
+	}()
+
 	wg := sync.WaitGroup{}
 	for _, proxyProvider := range gb.providers {
 		wg.Add(1)
@@ -336,10 +343,6 @@ func (gb *GroupBase) healthCheck() {
 	}
 
 	wg.Wait()
-	gb.failedTestMux.Lock()
-	gb.failedTimes = 0
-	gb.failedTestMux.Unlock()
-	gb.failedTesting.Store(false)
 }
 
 func (gb *GroupBase) onDialSuccess() {
