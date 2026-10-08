@@ -276,7 +276,7 @@ func isConnectionRefused(err error) bool {
 }
 
 func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func()) {
-	if adapterType == C.Direct || adapterType == C.Compatible || adapterType == C.Reject || adapterType == C.Pass || adapterType == C.RejectDrop {
+	if !dialFailureMarksNode(adapterType) {
 		return
 	}
 
