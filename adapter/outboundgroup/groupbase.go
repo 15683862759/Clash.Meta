@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/outbound"
@@ -262,6 +263,15 @@ func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus uti
 	}
 }
 
+func isConnectionRefused(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "connection refused") ||
+		strings.Contains(message, "actively refused")
+}
+
 func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func()) {
 	if adapterType == C.Direct || adapterType == C.Compatible || adapterType == C.Reject || adapterType == C.Pass || adapterType == C.RejectDrop {
 		return
@@ -272,7 +282,7 @@ func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func(
 	}
 
 	go func() {
-		if strings.Contains(err.Error(), "connection refused") {
+		if isConnectionRefused(err) {
 			fn()
 			return
 		}
