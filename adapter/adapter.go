@@ -53,9 +53,11 @@ func (p *Proxy) AliveForTestUrl(url string) bool {
 }
 
 // SetAliveForTestUrl records a locally observed dial result for the test URL.
+// A URL-specific result must not overwrite the global fallback state used by
+// groups that have not initialized their own URL-specific state yet.
 func (p *Proxy) SetAliveForTestUrl(url string, alive bool) {
-	p.alive.Store(alive)
 	if url == "" {
+		p.alive.Store(alive)
 		return
 	}
 
