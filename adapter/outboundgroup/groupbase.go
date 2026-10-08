@@ -264,6 +264,9 @@ func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus uti
 }
 
 func isConnectionRefused(err error) bool {
+	if err == nil {
+		return false
+	}
 	if errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
