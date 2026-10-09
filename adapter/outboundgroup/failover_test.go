@@ -565,6 +565,67 @@ func TestDirectMemberFailureIsNotBenched(t *testing.T) {
 	require.True(t, direct.AliveForTestUrl(testUrl))
 }
 
+func TestAFastNodeOnlyLosesToAMeasuredCandidate(t *testing.T) {
+	tests := []struct {
+		name                              string
+		cachedDelay, candidate, tolerance uint16
+		want                              bool
+	}{
+		{
+			name:        "an unmeasured candidate never takes over",
+			cachedDelay: 120,
+			candidate:   unknownDelay,
+			tolerance:   50,
+			want:        false,
+		},
+		{
+			name:        "a measured candidate replaces an unmeasured node",
+			cachedDelay: unknownDelay,
+			candidate:   120,
+			tolerance:   50,
+			want:        true,
+		},
+		{
+			name:        "two unmeasured nodes keep the cached one",
+			cachedDelay: unknownDelay,
+			candidate:   unknownDelay,
+			tolerance:   50,
+			want:        false,
+		},
+		{
+			name:        "a candidate inside the tolerance stays out",
+			cachedDelay: 100,
+			candidate:   80,
+			tolerance:   50,
+			want:        false,
+		},
+		{
+			name:        "a candidate past the tolerance takes over",
+			cachedDelay: 200,
+			candidate:   100,
+			tolerance:   50,
+			want:        true,
+		},
+		{
+			name:        "a slow candidate cannot win by wrapping the sum",
+			cachedDelay: 300,
+			candidate:   0xffe0,
+			tolerance:   0x30,
+			want:        false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(
+				t,
+				tt.want,
+				improvesOnCachedDelay(tt.cachedDelay, tt.candidate, tt.tolerance),
+			)
+		})
+	}
+}
+
 func TestFallbackSelectionChangeDropsTheCachedResolution(t *testing.T) {
 	first := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "first"}))
 	second := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "second"}))

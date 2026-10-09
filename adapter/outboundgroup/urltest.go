@@ -163,7 +163,11 @@ func (u *URLTest) shouldReplaceFastNode(fast C.Proxy, fastNotExist bool) bool {
 	if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) {
 		return true
 	}
-	return u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance
+	return improvesOnCachedDelay(
+		u.fastNode.LastDelayForTestUrl(u.testUrl),
+		fast.LastDelayForTestUrl(u.testUrl),
+		u.tolerance,
+	)
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
