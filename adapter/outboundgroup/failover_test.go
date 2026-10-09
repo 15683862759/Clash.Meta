@@ -5,17 +5,107 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/adapter/provider"
+	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
 
 	"github.com/stretchr/testify/require"
 )
+
+// swapProvider replaces its list the way a provider reload does: a new list
+// under the same name and a bumped version.
+type swapProvider struct {
+	mu      sync.Mutex
+	name    string
+	proxies []C.Proxy
+	version uint32
+}
+
+func newSwapProvider(name string, proxies []C.Proxy) *swapProvider {
+	return &swapProvider{name: name, proxies: proxies, version: 1}
+}
+
+func (p *swapProvider) Name() string               { return p.name }
+func (p *swapProvider) VehicleType() P.VehicleType { return P.HTTP }
+func (p *swapProvider) Type() P.ProviderType       { return P.Proxy }
+func (p *swapProvider) Initial() error             { return nil }
+func (p *swapProvider) Update() error              { return nil }
+func (p *swapProvider) Touch()                     {}
+func (p *swapProvider) HealthCheck()               {}
+func (p *swapProvider) HealthCheckURL() string     { return "" }
+func (p *swapProvider) Count() int                 { return len(p.Proxies()) }
+
+func (p *swapProvider) Proxies() []C.Proxy {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.proxies
+}
+
+func (p *swapProvider) Version() uint32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.version
+}
+
+func (p *swapProvider) RegisterHealthCheckTask(string, utils.IntRanges[uint16], string, uint) {}
+
+func (p *swapProvider) swap(proxies []C.Proxy) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.proxies = proxies
+	p.version++
+}
+
+func TestFallbackFollowsAProviderSwapInsteadOfACachedPick(t *testing.T) {
+	first := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "first"}))
+	second := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "second"}))
+	emptyFallback := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "COMPATIBLE"}))
+	pd := newSwapProvider("swap", []C.Proxy{first})
+
+	group, err := NewFallback(
+		GroupCommonOption{Name: "fallback", URL: testUrl, TestTimeout: 1000},
+		FallbackOption{},
+		emptyFallback,
+		[]P.ProxyProvider{pd},
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, first.Name(), group.Now())
+
+	// The subscription drops the node the cached pick was resolved to.
+	pd.swap([]C.Proxy{second})
+
+	require.Equal(t, second.Name(), group.Now())
+}
+
+func TestURLTestFollowsAProviderSwapInsteadOfACachedPick(t *testing.T) {
+	first := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "first"}))
+	second := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "second"}))
+	emptyFallback := adapter.NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "COMPATIBLE"}))
+	pd := newSwapProvider("swap", []C.Proxy{first})
+
+	group, err := NewURLTest(
+		GroupCommonOption{Name: "url-test", URL: testUrl, TestTimeout: 1000},
+		URLTestOption{},
+		emptyFallback,
+		[]P.ProxyProvider{pd},
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, first.Name(), group.Now())
+
+	// The subscription drops the node the cached fast node was resolved from.
+	pd.swap([]C.Proxy{second})
+
+	require.Equal(t, second.Name(), group.Now())
+}
 
 type recordingDeadlineProxy struct {
 	*outbound.Base

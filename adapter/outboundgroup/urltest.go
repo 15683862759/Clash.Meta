@@ -33,6 +33,9 @@ type URLTest struct {
 	fastHasAlternative atomic.Bool
 	rotateProbe        atomic.Bool
 	probeCursor        atomic.Uint32
+	versionsMu         sync.Mutex
+	// The provider versions the cached fast node was resolved from.
+	knownVersions []uint32
 }
 
 func (u *URLTest) Now() string {
@@ -164,6 +167,7 @@ func (u *URLTest) shouldReplaceFastNode(fast C.Proxy, fastNotExist bool) bool {
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
+	u.dropCacheForProviderSwap()
 	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
 		proxies := u.GetProxies(touch)
 		if len(proxies) == 0 {
@@ -226,6 +230,19 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 	}
 
 	return elm
+}
+
+// dropCacheForProviderSwap forgets the cached fast node when a provider has
+// replaced its list underneath it: the cached node may no longer be a member,
+// and its delay says nothing about the members that took its place.
+func (u *URLTest) dropCacheForProviderSwap() {
+	u.versionsMu.Lock()
+	defer u.versionsMu.Unlock()
+	if u.providerVersionsEqual(u.knownVersions) {
+		return
+	}
+	u.knownVersions = u.providerVersionsNow()
+	u.fastSingle.Reset()
 }
 
 // SupportUDP implements C.ProxyAdapter
